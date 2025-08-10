@@ -19,16 +19,16 @@ UKF::UKF() {
   n_x_ = 5;
 
   // initial state vector
-  x_ = VectorXd::Zero(n_x_);
+  x_ = VectorXd(n_x_);
 
   // initial covariance matrix
-  P_ = MatrixXd::Identity(n_x_, n_x_);
+  P_ = MatrixXd(n_x_, n_x_);
 
   // Process noise standard deviation longitudinal acceleration in m/s^2
   std_a_ = 3;
 
   // Process noise standard deviation yaw acceleration in rad/s^2
-  std_yawdd_ = 14;
+  std_yawdd_ = 2;
 
   /**
    * DO NOT MODIFY measurement noise values below.
@@ -64,10 +64,10 @@ UKF::UKF() {
   lambda_ = 3 - n_aug_;
 
   // predicted sigma points matrix
-  Xsig_pred_ = MatrixXd::Zero(n_x_, 2 * n_aug_ + 1);
+  Xsig_pred_ = MatrixXd(n_x_, 2 * n_aug_ + 1);
 
   // Weights of sigma points
-  weights_ = VectorXd::Zero(2 * n_aug_ + 1);
+  weights_ = VectorXd(2 * n_aug_ + 1);
 
   // set weights
   weights_(0) = lambda_/(lambda_ + n_aug_);
@@ -89,6 +89,8 @@ UKF::UKF() {
 
   // The current NIS for radar
   NIS_radar_ = 0.0;
+
+  is_initialized_ = false;
 }
 
 UKF::~UKF() {}
@@ -183,13 +185,15 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
        meas_package.raw_measurements_(1);
 
   // create matrix for sigma points in measurement space
-  Eigen::MatrixXd Zsig = Eigen::MatrixXd::Zero(n_z, 2 * n_aug_ + 1);
+  Eigen::MatrixXd Zsig = Eigen::MatrixXd(n_z, 2 * n_aug_ + 1);
 
   // mean predicted measurement
-  Eigen::VectorXd z_pred = Eigen::VectorXd::Zero(n_z);
+  Eigen::VectorXd z_pred = Eigen::VectorXd(n_z);
+  z_pred.fill(0.0);
 
   // measurement covariance matrix S
-  Eigen::MatrixXd S = Eigen::MatrixXd::Zero(n_z, n_z);
+  Eigen::MatrixXd S = Eigen::MatrixXd(n_z, n_z);
+  S.fill(0.0);
 
   // transform sigma points into measurement space
   for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
@@ -200,24 +204,33 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
   // mean predicted measurement
   z_pred.noalias() = Zsig * weights_;
 
-  Eigen::MatrixXd Zdiff = Zsig.colwise() - z_pred;
   // innovation covariance matrix S
-  S.noalias() = Zdiff * weights_.asDiagonal() * Zdiff.transpose();
+  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
+    // residual
+    VectorXd z_diff = Zsig.col(i) - z_pred;
+
+    S += weights_(i) * z_diff * z_diff.transpose();
+  }
 
   // adding noise
   S += R_lidar_;
 
-  // state difference
-  Eigen::MatrixXd Xdiff = Xsig_pred_.colwise() - x_;
-  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
-    // angle normalization
-    while (Xdiff(3)> M_PI) Xdiff(3) -= 2 * M_PI;
-    while (Xdiff(3)<-M_PI) Xdiff(3) += 2 * M_PI;
-  }
-
   // create matrix for cross correlation Tc
-  Eigen::MatrixXd Tc = Eigen::MatrixXd::Zero(n_x_, n_z);
-  Tc = Xdiff * weights_.asDiagonal() * Zdiff.transpose();
+  Eigen::MatrixXd Tc = Eigen::MatrixXd(n_x_, n_z);
+  Tc.fill(0.0);
+  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
+    // residual
+    VectorXd z_diff = Zsig.col(i) - z_pred;
+
+    // state difference
+    VectorXd x_diff = Xsig_pred_.col(i) - x_;
+
+    // normalize angles
+    while (x_diff(3) > M_PI) x_diff(3) -= 2 * M_PI;
+    while (x_diff(3) < -M_PI) x_diff(3) += 2 * M_PI;
+
+    Tc += weights_(i) * x_diff * z_diff.transpose();
+  }
 
   // Kalman gain K;
   Eigen::MatrixXd K = Tc * S.inverse();
@@ -251,13 +264,15 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
        meas_package.raw_measurements_(2);
 
    // create matrix for sigma points in measurement space
-  Eigen::MatrixXd Zsig = Eigen::MatrixXd::Zero(n_z, 2 * n_aug_ + 1);
+  Eigen::MatrixXd Zsig = Eigen::MatrixXd(n_z, 2 * n_aug_ + 1);
 
   // mean predicted measurement
-  Eigen::VectorXd z_pred = Eigen::VectorXd::Zero(n_z);
+  Eigen::VectorXd z_pred = Eigen::VectorXd(n_z);
+  z_pred.fill(0.0);
 
   // measurement covariance matrix S
-  Eigen::MatrixXd S = Eigen::MatrixXd::Zero(n_z, n_z);
+  Eigen::MatrixXd S = Eigen::MatrixXd(n_z, n_z);
+  S.fill(0.0);
 
   // transform sigma points into measurement space
   for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
@@ -278,31 +293,41 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
   // mean predicted measurement
   z_pred.noalias() = Zsig * weights_;
 
-  Eigen::MatrixXd Zdiff = Zsig.colwise() - z_pred;
-  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {  // 2n+1 simga points
-    // angle normalization
-    while (Zdiff(1) > M_PI) Zdiff(1) -= 2. * M_PI;
-    while (Zdiff(1) < -M_PI) Zdiff(1) += 2. * M_PI;
-  }
-
   // innovation covariance matrix S
-  S.noalias() = Zdiff * weights_.asDiagonal() * Zdiff.transpose();
+  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
+    // residual
+    VectorXd z_diff = Zsig.col(i) - z_pred;
+
+    // angle normalization
+    while (z_diff(1) > M_PI) z_diff(1) -= 2. * M_PI;
+    while (z_diff(1) < -M_PI) z_diff(1) += 2. * M_PI;
+
+    S += weights_(i) * z_diff * z_diff.transpose();
+  }
 
   // adding noise
   S += R_radar_;
 
 
-  // state difference
-  Eigen::MatrixXd Xdiff = Xsig_pred_.colwise() - x_;
-  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
-    // angle normalization
-    while (Xdiff(3)> M_PI) Xdiff(3) -= 2 * M_PI;
-    while (Xdiff(3)<-M_PI) Xdiff(3) += 2 * M_PI;
-  }
 
   // create matrix for cross correlation Tc
-  Eigen::MatrixXd Tc = Eigen::MatrixXd::Zero(n_x_, n_z);
-  Tc = Xdiff * weights_.asDiagonal() * Zdiff.transpose();
+  Eigen::MatrixXd Tc = Eigen::MatrixXd(n_x_, n_z);
+  Tc.fill(0.0);
+  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
+    // residual
+    VectorXd z_diff = Zsig.col(i) - z_pred;
+    // angle normalization
+    while (z_diff(1) > M_PI) z_diff(1) -= 2. * M_PI;
+    while (z_diff(1) < -M_PI) z_diff(1) += 2. * M_PI;
+
+    // state difference
+    VectorXd x_diff = Xsig_pred_.col(i) - x_;
+    // angle normalization
+    while (x_diff(3) > M_PI) x_diff(3) -= 2. * M_PI;
+    while (x_diff(3) < -M_PI) x_diff(3) += 2. * M_PI;
+
+    Tc += weights_(i) * x_diff * z_diff.transpose();
+  }
 
   // Kalman gain K;
   Eigen::MatrixXd K = Tc * S.inverse();
@@ -325,16 +350,20 @@ void UKF::UpdateRadar(MeasurementPackage meas_package) {
 
 void UKF::PredictSigmaPoints(double delta_t) {
   // create augmented mean vector
-  Eigen::VectorXd x_aug = Eigen::VectorXd::Zero(n_aug_);
+  Eigen::VectorXd x_aug = Eigen::VectorXd(n_aug_);
 
   // create augmented state covariance
-  Eigen::MatrixXd P_aug = Eigen::MatrixXd::Zero(n_aug_, n_aug_);
+  Eigen::MatrixXd P_aug = Eigen::MatrixXd(n_aug_, n_aug_);
+  P_aug.fill(0.0);
 
   // create augmented sigma point matrix
-  Eigen::MatrixXd Xsig_aug = Eigen::MatrixXd::Zero(n_aug_, 2 * n_aug_ + 1);
+  Eigen::MatrixXd Xsig_aug = Eigen::MatrixXd(n_aug_, 2 * n_aug_ + 1);
+  Xsig_aug.fill(0.0);
 
   // create augmented mean state
   x_aug.head(n_x_) = x_;
+  x_aug(5) = 0;
+  x_aug(6) = 0;
 
   // create augmented covariance matrix
   P_aug.topLeftCorner(n_x_, n_x_) = P_;
@@ -342,15 +371,13 @@ void UKF::PredictSigmaPoints(double delta_t) {
   P_aug(n_x_ + 1, n_x_ + 1) = std_yawdd_ * std_yawdd_;
 
   // create square root matrix
-  Eigen::MatrixXd A = P_aug.llt().matrixL();
-  Eigen::MatrixXd B = sqrt((lambda_ + n_aug_)) * A;
+  Eigen::MatrixXd L = P_aug.llt().matrixL();
 
   // create augmented sigma points
   Xsig_aug.col(0) = x_aug;
-
   for (int t = 0; t < n_aug_; t++) {
-    Xsig_aug.col(t + 1) = x_aug + B.col(t);
-    Xsig_aug.col(t + 1 + n_aug_) = x_aug - B.col(t);
+    Xsig_aug.col(t + 1) = x_aug + sqrt(lambda_ + n_aug_) * L.col(t);
+    Xsig_aug.col(t + 1 + n_aug_) = x_aug - sqrt(lambda_ + n_aug_) * L.col(t);
   }
 
   // predict sigma points
@@ -401,13 +428,14 @@ void UKF::PredictStateMeanAndCovariance() {
   // predicted state mean
   x_.noalias() = Xsig_pred_ * weights_;
 
-  Eigen::MatrixXd Xdiff = Xsig_pred_.colwise() - x_;
-  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {  // iterate over sigma points
-    // angle normalization
-    while (Xdiff(3, i) >  M_PI) Xdiff(3, i) -= 2 * M_PI;
-    while (Xdiff(3, i) < -M_PI) Xdiff(3, i) += 2 * M_PI;
-  }
+  P_.fill(0.0);
+  for (int i = 0; i < 2 * n_aug_ + 1; ++i) {
+    VectorXd x_diff = Xsig_pred_.col(i) - x_;
 
-  // predicted state covariance
-  P_.noalias() = Xdiff * weights_.asDiagonal() * Xdiff.transpose();
+    // angle normalization
+    while (x_diff(3) > M_PI) x_diff(3) -= 2. * M_PI;
+    while (x_diff(3) < -M_PI) x_diff(3) += 2. * M_PI;
+
+    P_ = P_ + weights_(i) * x_diff * x_diff.transpose();
+  }
 }
